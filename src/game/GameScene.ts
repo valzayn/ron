@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import {
   BUILDING,
   ENEMY_PATROLS,
+  ECONOMY,
   EVAC_ZONE,
   HOSTAGE_SPAWNS,
   PHASES,
@@ -53,6 +54,10 @@ const WALL_COLOR = 0x64748b;
 const FLOOR_COLOR = 0x1e293b;
 const EVAC_COLOR = 0x22c55e;
 
+// ---- Экономика (localStorage) ----
+const WALLET_KEY = 'ron.wallet';
+const BEST_RUN_KEY = 'ron.bestRun';
+
 interface Bullet {
   sprite: Phaser.GameObjects.Arc;
   vx: number;
@@ -89,14 +94,25 @@ export class GameScene extends Phaser.Scene {
   private fireKey!: Phaser.Input.Keyboard.Key;
   private rescueKey!: Phaser.Input.Keyboard.Key;
   private restartKey!: Phaser.Input.Keyboard.Key;
+  private keyOne!: Phaser.Input.Keyboard.Key;
+  private keyTwo!: Phaser.Input.Keyboard.Key;
 
   private hudText!: Phaser.GameObjects.Text;
   private pickupHint!: Phaser.GameObjects.Text;
   private phaseBanner!: Phaser.GameObjects.Text;
   private aimLine!: Phaser.GameObjects.Line;
+  private shopText!: Phaser.GameObjects.Text;
   private evacRect!: Phaser.Geom.Rectangle;
 
   private hp = PLAYER_MAX_HP;
+  private maxHp = PLAYER_MAX_HP;
+  private wallet = 0;
+  private moneyEarned = 0;
+  private bestRun = 0;
+  private armorBought = 0;
+  private fireRateBought = 0;
+  private shopOpen = true;
+  private shopMessage = '';
   private lastPlayerShot = 0;
   private invulnUntil = 0;
   private enemiesKilled = 0;
@@ -118,7 +134,6 @@ export class GameScene extends Phaser.Scene {
   create(): void {
     // Важно: сцена переиспользуется при рестарте, поля класса
     // нужно сбрасывать здесь, иначе игра «зависает» после R.
-    this.hp = PLAYER_MAX_HP;
     this.lastPlayerShot = 0;
     this.invulnUntil = 0;
     this.enemiesKilled = 0;
@@ -128,6 +143,15 @@ export class GameScene extends Phaser.Scene {
     this.aimAngle = 0;
     this.bullets = [];
     this.hostages = [];
+    this.moneyEarned = 0;
+    this.armorBought = 0;
+    this.fireRateBought = 0;
+    this.shopOpen = true;
+    this.shopMessage = '';
+    this.wallet = this.readNumber(WALLET_KEY, 0);
+    this.bestRun = this.readNumber(BEST_RUN_KEY, 0);
+    this.maxHp = PLAYER_MAX_HP + this.armorBought * ECONOMY.armorBonusHp;
+    this.hp = this.maxHp;
 
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
@@ -210,6 +234,8 @@ export class GameScene extends Phaser.Scene {
     this.fireKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
     this.rescueKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
     this.restartKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
+    this.keyOne = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ONE);
+    this.keyTwo = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TWO);
 
     // Камера следует за игроком по всему миру
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
@@ -252,6 +278,21 @@ export class GameScene extends Phaser.Scene {
       .setVisible(false);
 
     this.updateHud();
+
+    // Экран подготовки: магазин апгрейдов и старт миссии
+    this.shopText = this.add
+      .text(this.scale.width / 2, this.scale.height / 2 - 10, '', {
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: '16px',
+        color: '#e2e8f0',
+        align: 'center',
+        backgroundColor: '#0f172ae6',
+        padding: { x: 20, y: 14 },
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(30);
+    this.renderShop();
   }
 
   update(time: number, delta: number): void {
@@ -261,6 +302,11 @@ export class GameScene extends Phaser.Scene {
       if (Phaser.Input.Keyboard.JustDown(this.restartKey)) {
         this.scene.restart();
       }
+      return;
+    }
+
+    if (this.shopOpen) {
+      this.updateShop();
       return;
     }
 
@@ -299,7 +345,7 @@ export class GameScene extends Phaser.Scene {
     // Выстрел: пробел, пуля летит по направлению прицела
     if (
       Phaser.Input.Keyboard.JustDown(this.fireKey) &&
-      time - this.lastPlayerShot >= PLAYER_SHOOT_COOLDOWN_MS
+      time - this.lastPlayerShot >= this.playerFireCooldownMs()
     ) {
       this.spawnBullet(this.player.x, this.player.y, this.aimAngle, PLAYER_BULLET_SPEED, true);
       this.lastPlayerShot = time;
@@ -494,6 +540,7 @@ export class GameScene extends Phaser.Scene {
           ) {
             enemy.destroy();
             this.enemiesKilled += 1;
+            this.addMoney(ECONOMY.enemyReward);
             hit = true;
             break;
           }
@@ -535,6 +582,7 @@ export class GameScene extends Phaser.Scene {
         hostage.sprite.destroy();
         this.hostages.splice(i, 1);
         this.hostagesEvacuated += 1;
+        this.addMoney(ECONOMY.hostageReward);
       }
     }
 
@@ -548,11 +596,16 @@ export class GameScene extends Phaser.Scene {
     this.playerBody.setVelocity(0, 0);
     this.pickupHint.setVisible(false);
 
+    if (this.moneyEarned > this.bestRun) {
+      this.bestRun = this.moneyEarned;
+      this.writeNumber(BEST_RUN_KEY, this.bestRun);
+    }
+
     const title = result === 'win' ? 'ПОБЕДА!' : 'ПОРАЖЕНИЕ';
     const subtitle =
       result === 'win'
-        ? 'Все заложники эвакуированы.'
-        : 'Оперативник выбыл. Попробуй ещё раз.';
+        ? `Все заложники эвакуированы. Заработано ${this.moneyEarned}₽.`
+        : `Оперативник выбыл. Заработано ${this.moneyEarned}₽.`;
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
 
@@ -570,7 +623,7 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(21);
     this.add
-      .text(cx, cy + 30, `${subtitle} Нажми R для рестарта.`, {
+      .text(cx, cy + 30, `${subtitle} Рекорд миссии: ${this.bestRun}₽. Нажми R.`, {
         fontFamily: 'system-ui, sans-serif',
         fontSize: '18px',
         color: '#cbd5e1',
@@ -578,6 +631,96 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setScrollFactor(0)
       .setDepth(21);
+  }
+
+  private playerFireCooldownMs(): number {
+    return PLAYER_SHOOT_COOLDOWN_MS * (1 - this.fireRateBought * ECONOMY.fireRateBonus);
+  }
+
+  private addMoney(amount: number): void {
+    this.wallet += amount;
+    this.moneyEarned += amount;
+    this.writeNumber(WALLET_KEY, this.wallet);
+  }
+
+  private readNumber(key: string, fallback: number): number {
+    try {
+      const raw = window.localStorage.getItem(key);
+      const value = raw === null ? Number.NaN : Number(raw);
+      return Number.isFinite(value) ? value : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  private writeNumber(key: string, value: number): void {
+    try {
+      window.localStorage.setItem(key, String(value));
+    } catch {
+      // localStorage недоступен — играем без сохранений
+    }
+  }
+
+  private updateShop(): void {
+    if (Phaser.Input.Keyboard.JustDown(this.keyOne)) this.tryBuy('armor');
+    if (Phaser.Input.Keyboard.JustDown(this.keyTwo)) this.tryBuy('fireRate');
+    this.renderShop();
+
+    if (Phaser.Input.Keyboard.JustDown(this.fireKey)) {
+      this.shopOpen = false;
+      this.shopText.setVisible(false);
+    }
+  }
+
+  private tryBuy(kind: 'armor' | 'fireRate'): void {
+    if (kind === 'armor') {
+      if (this.armorBought >= ECONOMY.armorMaxPurchases) {
+        this.shopMessage = 'Броня уже на максимуме';
+        return;
+      }
+      if (this.wallet < ECONOMY.armorPrice) {
+        this.shopMessage = 'Недостаточно денег';
+        return;
+      }
+      this.wallet -= ECONOMY.armorPrice;
+      this.writeNumber(WALLET_KEY, this.wallet);
+      this.armorBought += 1;
+      this.maxHp = PLAYER_MAX_HP + this.armorBought * ECONOMY.armorBonusHp;
+      this.hp = this.maxHp;
+      this.shopMessage = `Броня куплена: макс. HP ${this.maxHp}`;
+    } else {
+      if (this.fireRateBought >= ECONOMY.fireRateMaxPurchases) {
+        this.shopMessage = 'Скорострельность уже на максимуме';
+        return;
+      }
+      if (this.wallet < ECONOMY.fireRatePrice) {
+        this.shopMessage = 'Недостаточно денег';
+        return;
+      }
+      this.wallet -= ECONOMY.fireRatePrice;
+      this.writeNumber(WALLET_KEY, this.wallet);
+      this.fireRateBought += 1;
+      this.shopMessage = `Скорострельность +${ECONOMY.fireRateBonus * 100}%`;
+    }
+  }
+
+  private renderShop(): void {
+    this.shopText.setText(
+      [
+        'ПОДГОТОВКА К ОПЕРАЦИИ',
+        '',
+        `Кошелёк: ${this.wallet}₽ (рекорд миссии: ${this.bestRun}₽)`,
+        '',
+        `[1] Броня +${ECONOMY.armorBonusHp} HP — ${ECONOMY.armorPrice}₽ (куплено ${this.armorBought}/${ECONOMY.armorMaxPurchases})`,
+        `[2] Скорострельность +${ECONOMY.fireRateBonus * 100}% — ${ECONOMY.fireRatePrice}₽ (куплено ${this.fireRateBought}/${ECONOMY.fireRateMaxPurchases})`,
+        '',
+        'WASD — движение, стрелки — прицел, пробел — выстрел',
+        'E — забрать заложника',
+        this.shopMessage,
+        '',
+        'ПРОБЕЛ — НАЧАТЬ ОПЕРАЦИЮ',
+      ].join('\n'),
+    );
   }
 
   /** Проверка прямой видимости: не пересекает ли отрезок стену. */
@@ -603,9 +746,10 @@ export class GameScene extends Phaser.Scene {
     this.hudText.setText(
       [
         `Фаза: ${this.phase.name}`,
-        `HP: ${this.hp}`,
+        `HP: ${this.hp}/${this.maxHp}`,
         `Заложники: ${this.hostagesEvacuated}/${HOSTAGE_SPAWNS.length}`,
         `Враги: ${this.enemiesKilled}/${ENEMY_PATROLS.length}`,
+        `Кошелёк: ${this.wallet}₽ (+${this.moneyEarned})`,
       ].join('\n'),
     );
   }

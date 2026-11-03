@@ -115,6 +115,21 @@ export interface Phase {
   reinforcements: number;
 }
 
+/**
+ * Экономика миссии: награды и цены апгрейдов в магазине
+ * на экране подготовки. Апгрейды действуют на текущую миссию.
+ */
+export const ECONOMY = {
+  hostageReward: 100,
+  enemyReward: 25,
+  armorPrice: 300,
+  armorBonusHp: 50,
+  armorMaxPurchases: 2,
+  fireRatePrice: 400,
+  fireRateBonus: 0.25,
+  fireRateMaxPurchases: 2,
+} as const;
+
 export const PHASES: Phase[] = [
   {
     name: 'РАЗВЕДКА',
