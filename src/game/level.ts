@@ -100,3 +100,36 @@ export const HOSTAGE_SPAWNS: Point[] = [
 
 /** Зона эвакуации на улице у входа. */
 export const EVAC_ZONE: Rect = { x: 890, y: 1175, width: 140, height: 70 };
+
+/**
+ * Фазы миссии. Переход к следующей фазе происходит, когда спасено
+ * не меньше заложников, чем hostagesRequired у следующей фазы.
+ * Вход в фазу усиливает врагов и добавляет подкрепление.
+ */
+export interface Phase {
+  name: string;
+  hostagesRequired: number;
+  enemySpeedMultiplier: number;
+  enemyAggroRange: number;
+  enemyFireCooldownMs: number;
+  reinforcements: number;
+}
+
+export const PHASES: Phase[] = [
+  {
+    name: 'РАЗВЕДКА',
+    hostagesRequired: 0,
+    enemySpeedMultiplier: 1,
+    enemyAggroRange: 300,
+    enemyFireCooldownMs: 900,
+    reinforcements: 0,
+  },
+  {
+    name: 'ТРЕВОГА',
+    hostagesRequired: 1,
+    enemySpeedMultiplier: 1.4,
+    enemyAggroRange: 450,
+    enemyFireCooldownMs: 600,
+    reinforcements: 2,
+  },
+];

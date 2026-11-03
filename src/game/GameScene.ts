@@ -4,11 +4,13 @@ import {
   ENEMY_PATROLS,
   EVAC_ZONE,
   HOSTAGE_SPAWNS,
+  PHASES,
   PLAYER_SPAWN,
   WALLS,
   WORLD_HEIGHT,
   WORLD_WIDTH,
 } from './level';
+import type { Phase } from './level';
 
 // ---- Игрок ----
 const PLAYER_SPEED = 260;
@@ -21,8 +23,6 @@ const PLAYER_INVULN_MS = 600;
 const ENEMY_SIZE = 32;
 const ENEMY_COLOR = 0xef4444;
 const ENEMY_SPEED = 60;
-const ENEMY_AGGRO_RANGE = 300;
-const ENEMY_FIRE_COOLDOWN_MS = 900;
 const ENEMY_DAMAGE = 25;
 
 // ---- Заложники ----
@@ -40,6 +40,13 @@ const PLAYER_BULLET_COLOR = 0xfacc15;
 const PLAYER_SHOOT_COOLDOWN_MS = 280;
 const ENEMY_BULLET_SPEED = 320;
 const ENEMY_BULLET_COLOR = 0xf87171;
+
+// ---- Прицел ----
+const AIM_LENGTH = 70;
+const AIM_COLOR = 0xfacc15;
+
+// ---- Фазы ----
+const PHASE_BANNER_MS = 2500;
 
 // ---- Оформление ----
 const WALL_COLOR = 0x64748b;
@@ -59,11 +66,13 @@ interface Hostage {
 }
 
 /**
- * Этап «Враги, заложники, стрельба».
+ * Этап «Фазы тревоги» + исправления по итогам игры.
  *
- * Пробел — выстрел в сторону курсора, E — забрать заложника,
- * R — рестарт. Враги патрулируют комнаты и стреляют в игрока.
- * Цель — вывести всех заложников в зону эвакуации на улице.
+ * Управление: WASD — движение, стрелки или курсор — прицел,
+ * пробел — выстрел, E — забрать заложника, R — рестарт.
+ *
+ * Фазы: PHASES из level.ts. После спасения первого заложника
+ * начинается «ТРЕВОГА» — враги быстрее и злее, приходит подкрепление.
  */
 export class GameScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Rectangle;
@@ -75,14 +84,16 @@ export class GameScene extends Phaser.Scene {
   private hostages: Hostage[] = [];
   private bullets: Bullet[] = [];
 
-  private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
+  private aimKeys!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
   private fireKey!: Phaser.Input.Keyboard.Key;
   private rescueKey!: Phaser.Input.Keyboard.Key;
   private restartKey!: Phaser.Input.Keyboard.Key;
 
   private hudText!: Phaser.GameObjects.Text;
   private pickupHint!: Phaser.GameObjects.Text;
+  private phaseBanner!: Phaser.GameObjects.Text;
+  private aimLine!: Phaser.GameObjects.Line;
   private evacRect!: Phaser.Geom.Rectangle;
 
   private hp = PLAYER_MAX_HP;
@@ -91,12 +102,33 @@ export class GameScene extends Phaser.Scene {
   private enemiesKilled = 0;
   private hostagesEvacuated = 0;
   private gameOver = false;
+  private phaseIndex = 0;
+  private aimAngle = 0;
+  private lastPointerX = 0;
+  private lastPointerY = 0;
 
   constructor() {
     super('GameScene');
   }
 
+  private get phase(): Phase {
+    return PHASES[this.phaseIndex];
+  }
+
   create(): void {
+    // Важно: сцена переиспользуется при рестарте, поля класса
+    // нужно сбрасывать здесь, иначе игра «зависает» после R.
+    this.hp = PLAYER_MAX_HP;
+    this.lastPlayerShot = 0;
+    this.invulnUntil = 0;
+    this.enemiesKilled = 0;
+    this.hostagesEvacuated = 0;
+    this.gameOver = false;
+    this.phaseIndex = 0;
+    this.aimAngle = 0;
+    this.bullets = [];
+    this.hostages = [];
+
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
     // Пол здания (рисуется под стенами)
@@ -130,11 +162,7 @@ export class GameScene extends Phaser.Scene {
     // Враги: прямоугольники с динамическим телом и маршрутом патруля
     this.enemyGroup = this.physics.add.group();
     for (const patrol of ENEMY_PATROLS) {
-      const enemy = this.add.rectangle(patrol.sx, patrol.sy, ENEMY_SIZE, ENEMY_SIZE, ENEMY_COLOR);
-      enemy.setData('route', patrol);
-      enemy.setData('target', { x: patrol.ex, y: patrol.ey });
-      enemy.setData('lastShot', 0);
-      this.enemyGroup.add(enemy);
+      this.createEnemy(patrol);
     }
     this.physics.add.collider(this.enemyGroup, this.walls);
     this.physics.add.collider(this.player, this.enemyGroup);
@@ -163,16 +191,21 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 1);
 
-    // Управление: стрелки/WASD — движение, пробел — огонь, E — заложник, R — рестарт
+    // Управление: WASD — движение, стрелки — прицел
     if (!this.input.keyboard) {
       throw new Error('Keyboard input is unavailable.');
     }
-    this.cursors = this.input.keyboard.createCursorKeys();
     this.wasd = this.input.keyboard.addKeys({
       up: Phaser.Input.Keyboard.KeyCodes.W,
       down: Phaser.Input.Keyboard.KeyCodes.S,
       left: Phaser.Input.Keyboard.KeyCodes.A,
       right: Phaser.Input.Keyboard.KeyCodes.D,
+    }) as Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
+    this.aimKeys = this.input.keyboard.addKeys({
+      up: Phaser.Input.Keyboard.KeyCodes.UP,
+      down: Phaser.Input.Keyboard.KeyCodes.DOWN,
+      left: Phaser.Input.Keyboard.KeyCodes.LEFT,
+      right: Phaser.Input.Keyboard.KeyCodes.RIGHT,
     }) as Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
     this.fireKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
     this.rescueKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
@@ -181,6 +214,9 @@ export class GameScene extends Phaser.Scene {
     // Камера следует за игроком по всему миру
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+
+    // Прицел: линия от игрока в направлении стрельбы
+    this.aimLine = this.add.line(0, 0, 0, 0, AIM_LENGTH, 0, AIM_COLOR, 0.55).setOrigin(0, 0);
 
     // HUD (закреплён на экране)
     this.hudText = this.add
@@ -199,6 +235,20 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 1)
       .setDepth(9)
+      .setVisible(false);
+
+    // Объявление о входе в новую фазу
+    this.phaseBanner = this.add
+      .text(this.scale.width / 2, this.scale.height / 3, '', {
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: '40px',
+        color: '#f87171',
+        backgroundColor: '#111827cc',
+        padding: { x: 16, y: 8 },
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(15)
       .setVisible(false);
 
     this.updateHud();
@@ -220,6 +270,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.movePlayer(time);
+    this.updateAim();
+    this.updatePhase();
     this.updateEnemies(time);
     this.updateHostages();
     this.updatePickupHint();
@@ -232,10 +284,10 @@ export class GameScene extends Phaser.Scene {
     let dx = 0;
     let dy = 0;
 
-    if (this.cursors.left.isDown || this.wasd.left.isDown) dx -= 1;
-    if (this.cursors.right.isDown || this.wasd.right.isDown) dx += 1;
-    if (this.cursors.up.isDown || this.wasd.up.isDown) dy -= 1;
-    if (this.cursors.down.isDown || this.wasd.down.isDown) dy += 1;
+    if (this.wasd.left.isDown) dx -= 1;
+    if (this.wasd.right.isDown) dx += 1;
+    if (this.wasd.up.isDown) dy -= 1;
+    if (this.wasd.down.isDown) dy += 1;
 
     if (dx !== 0 || dy !== 0) {
       const length = Math.hypot(dx, dy);
@@ -244,20 +296,14 @@ export class GameScene extends Phaser.Scene {
       this.playerBody.setVelocity(0, 0);
     }
 
-    // Выстрел: пробел, пуля летит в сторону курсора
+    // Выстрел: пробел, пуля летит по направлению прицела
     if (
       Phaser.Input.Keyboard.JustDown(this.fireKey) &&
       time - this.lastPlayerShot >= PLAYER_SHOOT_COOLDOWN_MS
     ) {
-      this.shootAtPointer();
+      this.spawnBullet(this.player.x, this.player.y, this.aimAngle, PLAYER_BULLET_SPEED, true);
       this.lastPlayerShot = time;
     }
-  }
-
-  private shootAtPointer(): void {
-    const pointer = this.input.activePointer;
-    const angle = Math.atan2(pointer.worldY - this.player.y, pointer.worldX - this.player.x);
-    this.spawnBullet(this.player.x, this.player.y, angle, PLAYER_BULLET_SPEED, true);
   }
 
   private spawnBullet(x: number, y: number, angle: number, speed: number, fromPlayer: boolean): void {
@@ -271,7 +317,72 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /** Прицел: стрелки задают направление, иначе — курсор. */
+  private updateAim(): void {
+    const pointer = this.input.activePointer;
+    let ax = 0;
+    let ay = 0;
+
+    if (this.aimKeys.left.isDown) ax -= 1;
+    if (this.aimKeys.right.isDown) ax += 1;
+    if (this.aimKeys.up.isDown) ay -= 1;
+    if (this.aimKeys.down.isDown) ay += 1;
+
+    if (ax !== 0 || ay !== 0) {
+      this.aimAngle = Math.atan2(ay, ax);
+    } else if (
+      pointer.worldX !== this.lastPointerX ||
+      pointer.worldY !== this.lastPointerY
+    ) {
+      this.aimAngle = Math.atan2(pointer.worldY - this.player.y, pointer.worldX - this.player.x);
+    }
+    this.lastPointerX = pointer.worldX;
+    this.lastPointerY = pointer.worldY;
+
+    this.aimLine.setTo(
+      0,
+      0,
+      Math.cos(this.aimAngle) * AIM_LENGTH,
+      Math.sin(this.aimAngle) * AIM_LENGTH,
+    );
+    this.aimLine.setPosition(this.player.x, this.player.y);
+  }
+
+  /** Переход к следующей фазе по числу спасённых заложников. */
+  private updatePhase(): void {
+    const next = PHASES[this.phaseIndex + 1];
+    if (!next || this.hostagesEvacuated < next.hostagesRequired) return;
+
+    this.phaseIndex += 1;
+    const phase = this.phase;
+
+    if (phase.reinforcements > 0) {
+      this.spawnReinforcements(phase.reinforcements);
+    }
+
+    this.phaseBanner.setText(`⚠ ФАЗА ${this.phaseIndex + 1}: ${phase.name} — враги усилены!`);
+    this.phaseBanner.setVisible(true);
+    this.time.delayedCall(PHASE_BANNER_MS, () => this.phaseBanner.setVisible(false));
+  }
+
+  private spawnReinforcements(count: number): void {
+    for (let i = 0; i < count; i++) {
+      const route = Phaser.Utils.Array.GetRandom(ENEMY_PATROLS);
+      this.createEnemy(route);
+    }
+  }
+
+  private createEnemy(patrol: { sx: number; sy: number; ex: number; ey: number }): void {
+    const enemy = this.add.rectangle(patrol.sx, patrol.sy, ENEMY_SIZE, ENEMY_SIZE, ENEMY_COLOR);
+    enemy.setData('route', patrol);
+    enemy.setData('target', { x: patrol.ex, y: patrol.ey });
+    enemy.setData('lastShot', 0);
+    this.enemyGroup.add(enemy);
+  }
+
   private updateEnemies(time: number): void {
+    const phase = this.phase;
+
     for (const enemy of this.enemyGroup.getChildren() as Phaser.GameObjects.Rectangle[]) {
       const body = enemy.body as Phaser.Physics.Arcade.Body;
       const route = enemy.getData('route') as { sx: number; sy: number; ex: number; ey: number };
@@ -285,7 +396,8 @@ export class GameScene extends Phaser.Scene {
         body.setVelocity(0, 0);
       } else {
         const angle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
-        body.setVelocity(Math.cos(angle) * ENEMY_SPEED, Math.sin(angle) * ENEMY_SPEED);
+        const speed = ENEMY_SPEED * phase.enemySpeedMultiplier;
+        body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
       }
 
       // Стрельба по игроку: рядом и есть прямая видимость
@@ -296,9 +408,9 @@ export class GameScene extends Phaser.Scene {
         this.player.y,
       );
       if (
-        distToPlayer <= ENEMY_AGGRO_RANGE &&
+        distToPlayer <= phase.enemyAggroRange &&
         this.canSee(enemy.x, enemy.y, this.player.x, this.player.y) &&
-        time - (enemy.getData('lastShot') as number) >= ENEMY_FIRE_COOLDOWN_MS
+        time - (enemy.getData('lastShot') as number) >= phase.enemyFireCooldownMs
       ) {
         const angle = Math.atan2(this.player.y - enemy.y, this.player.x - enemy.x);
         this.spawnBullet(enemy.x, enemy.y, angle, ENEMY_BULLET_SPEED, false);
@@ -490,6 +602,7 @@ export class GameScene extends Phaser.Scene {
   private updateHud(): void {
     this.hudText.setText(
       [
+        `Фаза: ${this.phase.name}`,
         `HP: ${this.hp}`,
         `Заложники: ${this.hostagesEvacuated}/${HOSTAGE_SPAWNS.length}`,
         `Враги: ${this.enemiesKilled}/${ENEMY_PATROLS.length}`,
