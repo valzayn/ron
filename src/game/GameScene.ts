@@ -1,17 +1,14 @@
 import Phaser from 'phaser';
 import {
   BUILDING,
-  ENEMY_PATROLS,
   ECONOMY,
-  EVAC_ZONE,
-  HOSTAGE_SPAWNS,
   PHASES,
-  PLAYER_SPAWN,
-  WALLS,
   WORLD_HEIGHT,
   WORLD_WIDTH,
 } from './level';
-import type { Phase } from './level';
+import type { Phase, Wall } from './level';
+import { generateLevel } from './generator';
+import type { GeneratedLevel } from './generator';
 
 // ---- Игрок ----
 const PLAYER_SPEED = 260;
@@ -88,6 +85,8 @@ export class GameScene extends Phaser.Scene {
   private hostageGroup!: Phaser.Physics.Arcade.Group;
   private hostages: Hostage[] = [];
   private bullets: Bullet[] = [];
+  private levelWalls: Wall[] = [];
+  private generated!: GeneratedLevel;
 
   private wasd!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
   private aimKeys!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
@@ -153,6 +152,10 @@ export class GameScene extends Phaser.Scene {
     this.maxHp = PLAYER_MAX_HP + this.armorBought * ECONOMY.armorBonusHp;
     this.hp = this.maxHp;
 
+    // Новая планировка здания на каждый запуск сцены
+    this.generated = generateLevel();
+    this.levelWalls = this.generated.walls;
+
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
     // Пол здания (рисуется под стенами)
@@ -162,7 +165,7 @@ export class GameScene extends Phaser.Scene {
 
     // Стены как статические тела
     this.walls = this.physics.add.staticGroup();
-    for (const wall of WALLS) {
+    for (const wall of this.levelWalls) {
       const rect = this.add
         .rectangle(wall.x, wall.y, wall.width, wall.height, WALL_COLOR)
         .setOrigin(0);
@@ -170,9 +173,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Игрок — динамическое физическое тело
+    const spawnX = Phaser.Math.Clamp(this.generated.entrance.x - 100, 440, 1440);
     this.player = this.add.rectangle(
-      PLAYER_SPAWN.x,
-      PLAYER_SPAWN.y,
+      spawnX,
+      1240,
       PLAYER_SIZE,
       PLAYER_SIZE,
       PLAYER_COLOR,
@@ -185,7 +189,7 @@ export class GameScene extends Phaser.Scene {
 
     // Враги: прямоугольники с динамическим телом и маршрутом патруля
     this.enemyGroup = this.physics.add.group();
-    for (const patrol of ENEMY_PATROLS) {
+    for (const patrol of this.generated.enemyPatrols) {
       this.createEnemy(patrol);
     }
     this.physics.add.collider(this.enemyGroup, this.walls);
@@ -193,7 +197,7 @@ export class GameScene extends Phaser.Scene {
 
     // Заложники: круги с динамическим телом
     this.hostageGroup = this.physics.add.group();
-    for (const spawn of HOSTAGE_SPAWNS) {
+    for (const spawn of this.generated.hostageSpawns) {
       const sprite = this.add.circle(spawn.x, spawn.y, HOSTAGE_SIZE, HOSTAGE_COLOR);
       this.hostageGroup.add(sprite);
       this.hostages.push({ sprite, rescued: false });
@@ -201,14 +205,16 @@ export class GameScene extends Phaser.Scene {
     this.physics.add.collider(this.hostageGroup, this.walls);
     this.physics.add.collider(this.hostageGroup, this.enemyGroup);
 
-    // Зона эвакуации на улице у входа
-    this.evacRect = new Phaser.Geom.Rectangle(EVAC_ZONE.x, EVAC_ZONE.y, EVAC_ZONE.width, EVAC_ZONE.height);
+    // Зона эвакуации на улице под входной дверью
+    const evacX = this.generated.entrance.x - 30;
+    const evacWidth = this.generated.entrance.width + 60;
+    this.evacRect = new Phaser.Geom.Rectangle(evacX, 1170, evacWidth, 75);
     this.add
-      .rectangle(EVAC_ZONE.x, EVAC_ZONE.y, EVAC_ZONE.width, EVAC_ZONE.height, EVAC_COLOR, 0.12)
+      .rectangle(evacX, 1170, evacWidth, 75, EVAC_COLOR, 0.12)
       .setOrigin(0)
       .setStrokeStyle(2, EVAC_COLOR, 0.9);
     this.add
-      .text(EVAC_ZONE.x + EVAC_ZONE.width / 2, EVAC_ZONE.y - 10, 'ЭВАКУАЦИЯ', {
+      .text(evacX + evacWidth / 2, 1160, 'ЭВАКУАЦИЯ', {
         fontFamily: 'system-ui, sans-serif',
         fontSize: '14px',
         color: '#bbf7d0',
@@ -413,7 +419,7 @@ export class GameScene extends Phaser.Scene {
 
   private spawnReinforcements(count: number): void {
     for (let i = 0; i < count; i++) {
-      const route = Phaser.Utils.Array.GetRandom(ENEMY_PATROLS);
+      const route = Phaser.Utils.Array.GetRandom(this.generated.enemyPatrols);
       this.createEnemy(route);
     }
   }
@@ -586,7 +592,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    if (this.hostagesEvacuated >= HOSTAGE_SPAWNS.length) {
+    if (this.hostagesEvacuated >= this.generated.hostageSpawns.length) {
       this.endGame('win');
     }
   }
@@ -737,7 +743,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private pointInWall(x: number, y: number): boolean {
-    return WALLS.some(
+    return this.levelWalls.some(
       (w) => x >= w.x && x <= w.x + w.width && y >= w.y && y <= w.y + w.height,
     );
   }
@@ -747,8 +753,8 @@ export class GameScene extends Phaser.Scene {
       [
         `Фаза: ${this.phase.name}`,
         `HP: ${this.hp}/${this.maxHp}`,
-        `Заложники: ${this.hostagesEvacuated}/${HOSTAGE_SPAWNS.length}`,
-        `Враги: ${this.enemiesKilled}/${ENEMY_PATROLS.length}`,
+        `Заложники: ${this.hostagesEvacuated}/${this.generated.hostageSpawns.length}`,
+        `Враги: ${this.enemiesKilled}/${this.generated.enemyPatrols.length}`,
         `Кошелёк: ${this.wallet}₽ (+${this.moneyEarned})`,
       ].join('\n'),
     );
