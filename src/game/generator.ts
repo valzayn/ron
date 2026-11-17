@@ -14,6 +14,7 @@ export interface GeneratedLevel {
   walls: Wall[];
   enemyPatrols: PatrolRoute[];
   hostageSpawns: Point[];
+  medkitSpawns: Point[];
   entrance: { x: number; y: number; width: number };
 }
 
@@ -145,10 +146,22 @@ export function generateLevel(): GeneratedLevel {
     });
   }
 
+  // Аптечки: 1–2 штуки в случайных комнатах
+  const medkitSpawns: Point[] = [];
+  const medkitCount = randInt(1, 2);
+  for (let i = 0; i < medkitCount; i++) {
+    const cell = cells[(ENEMY_COUNT + hostageCount + i) % cells.length];
+    medkitSpawns.push({
+      x: randInt(xs[cell.col] + 60, xs[cell.col + 1] - 60),
+      y: randInt(ys[cell.row] + 60, ys[cell.row + 1] - 60),
+    });
+  }
+
   return {
     walls,
     enemyPatrols,
     hostageSpawns,
+    medkitSpawns,
     entrance: { x: entranceX, y: bottom, width: ENTRANCE_WIDTH },
   };
 }

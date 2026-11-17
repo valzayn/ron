@@ -136,43 +136,105 @@ export interface Upgrade {
   maxLevel: number;
 }
 
-/** Ветки прокачки в магазине: 4 карточки, по 2 уровня. */
+/**
+ * Ветки прокачки в магазине: 4 карточки по 5 уровней.
+ * Уровни сохраняются между миссиями (localStorage), эффекты слабее,
+ * чтобы прокачка была постепенной.
+ */
 export const UPGRADES: Upgrade[] = [
   {
     id: 'armor',
     name: 'Броня',
     icon: '🛡',
-    description: '+50 к максимальному HP',
-    basePrice: 300,
-    priceStep: 150,
-    maxLevel: 2,
+    description: '+15 к максимальному HP',
+    basePrice: 150,
+    priceStep: 100,
+    maxLevel: 5,
   },
   {
     id: 'fireRate',
     name: 'Скорострельность',
     icon: '⚡',
-    description: '+25% к темпу огня',
-    basePrice: 400,
-    priceStep: 200,
-    maxLevel: 2,
+    description: '+8% к темпу огня',
+    basePrice: 200,
+    priceStep: 120,
+    maxLevel: 5,
   },
   {
     id: 'damage',
     name: 'Урон',
     icon: '🎯',
-    description: '+10 к урону пули',
-    basePrice: 350,
-    priceStep: 175,
-    maxLevel: 2,
+    description: '+4 к урону пули',
+    basePrice: 180,
+    priceStep: 110,
+    maxLevel: 5,
   },
   {
     id: 'speed',
     name: 'Скорость',
     icon: '👟',
-    description: '+15% к скорости движения',
-    basePrice: 250,
-    priceStep: 125,
-    maxLevel: 2,
+    description: '+5% к скорости движения',
+    basePrice: 120,
+    priceStep: 80,
+    maxLevel: 5,
+  },
+];
+
+export type WeaponId = 'pistol' | 'shotgun' | 'smg';
+
+export interface Weapon {
+  id: WeaponId;
+  name: string;
+  icon: string;
+  description: string;
+  price: number;
+  damage: number;
+  cooldownMs: number;
+  pellets: number;
+  spreadRad: number;
+  bulletSpeed: number;
+}
+
+/**
+ * Арсенал: пистолет доступен сразу, дробовик и ПП покупаются один раз
+ * и остаются навсегда. Выбранное оружие сохраняется.
+ */
+export const WEAPONS: Weapon[] = [
+  {
+    id: 'pistol',
+    name: 'Пистолет',
+    icon: '🔫',
+    description: 'Точный, средний урон',
+    price: 0,
+    damage: 20,
+    cooldownMs: 280,
+    pellets: 1,
+    spreadRad: 0,
+    bulletSpeed: 520,
+  },
+  {
+    id: 'shotgun',
+    name: 'Дробовик',
+    icon: '💥',
+    description: '3 дробины веером',
+    price: 600,
+    damage: 15,
+    cooldownMs: 650,
+    pellets: 3,
+    spreadRad: 0.22,
+    bulletSpeed: 480,
+  },
+  {
+    id: 'smg',
+    name: 'ПП',
+    icon: '🔥',
+    description: 'Быстрый огонь, малый урон',
+    price: 500,
+    damage: 12,
+    cooldownMs: 120,
+    pellets: 1,
+    spreadRad: 0.05,
+    bulletSpeed: 560,
   },
 ];
 
