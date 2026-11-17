@@ -667,6 +667,13 @@ export class GameScene extends Phaser.Scene {
 
     container.add([startButton, startLabel, controls, this.shopAutoAimText]);
 
+    // Важно для кликов мышью: у каждого дочернего объекта контейнера
+    // должен быть scrollFactor 0, иначе Phaser проверяет попадание
+    // по мировым координатам камеры и клики уходят мимо.
+    container.each((child: Phaser.GameObjects.GameObject) => {
+      (child as unknown as Phaser.GameObjects.Components.ScrollFactor).setScrollFactor(0);
+    });
+
     this.shopContainer = container;
     this.renderShop();
   }
