@@ -116,19 +116,65 @@ export interface Phase {
 }
 
 /**
- * Экономика миссии: награды и цены апгрейдов в магазине
- * на экране подготовки. Апгрейды действуют на текущую миссию.
+ * Экономика миссии: награды за действия.
+ * Апгрейды покупаются на экране подготовки и действуют текущую миссию.
  */
 export const ECONOMY = {
   hostageReward: 100,
-  enemyReward: 25,
-  armorPrice: 300,
-  armorBonusHp: 50,
-  armorMaxPurchases: 2,
-  fireRatePrice: 400,
-  fireRateBonus: 0.25,
-  fireRateMaxPurchases: 2,
+  enemyReward: 40,
 } as const;
+
+export type UpgradeId = 'armor' | 'fireRate' | 'damage' | 'speed';
+
+export interface Upgrade {
+  id: UpgradeId;
+  name: string;
+  icon: string;
+  description: string;
+  basePrice: number;
+  priceStep: number;
+  maxLevel: number;
+}
+
+/** Ветки прокачки в магазине: 4 карточки, по 2 уровня. */
+export const UPGRADES: Upgrade[] = [
+  {
+    id: 'armor',
+    name: 'Броня',
+    icon: '🛡',
+    description: '+50 к максимальному HP',
+    basePrice: 300,
+    priceStep: 150,
+    maxLevel: 2,
+  },
+  {
+    id: 'fireRate',
+    name: 'Скорострельность',
+    icon: '⚡',
+    description: '+25% к темпу огня',
+    basePrice: 400,
+    priceStep: 200,
+    maxLevel: 2,
+  },
+  {
+    id: 'damage',
+    name: 'Урон',
+    icon: '🎯',
+    description: '+10 к урону пули',
+    basePrice: 350,
+    priceStep: 175,
+    maxLevel: 2,
+  },
+  {
+    id: 'speed',
+    name: 'Скорость',
+    icon: '👟',
+    description: '+15% к скорости движения',
+    basePrice: 250,
+    priceStep: 125,
+    maxLevel: 2,
+  },
+];
 
 export const PHASES: Phase[] = [
   {
@@ -145,6 +191,6 @@ export const PHASES: Phase[] = [
     enemySpeedMultiplier: 1.4,
     enemyAggroRange: 450,
     enemyFireCooldownMs: 600,
-    reinforcements: 2,
+    reinforcements: 3,
   },
 ];
